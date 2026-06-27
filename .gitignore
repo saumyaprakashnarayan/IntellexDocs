@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+env/
+venv/
+*.env
+
+# Node
+node_modules/
+.next/
+out/
+.DS_Store
+
+# Docker
+*.log
+*.pid
+
+# Chroma and uploads
+backend/chroma_db/
+backend/uploads/

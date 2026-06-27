@@ -1,0 +1,21 @@
+fastapi==0.111.2
+uvicorn[standard]==0.23.2
+pydantic==2.8.0
+<<<<<<< HEAD
+=======
+pydantic-settings==2.3.4
+>>>>>>> 33502da (chore)
+SQLAlchemy==2.0.33
+asyncpg==0.27.0
+passlib[bcrypt]==1.7.5
+python-jose==3.2.0
+python-multipart==0.0.6
+pypdf==4.4.0
+langchain==0.1.0
+langchain-google-genai==0.1.0
+chromadb==0.4.0
+psycopg[binary]==3.2.0
+python-dotenv==1.0.0
+pytest==8.4.3
+httpx==0.29.4
+pytest-asyncio==0.22.0
