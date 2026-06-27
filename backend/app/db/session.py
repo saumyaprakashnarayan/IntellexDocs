@@ -5,6 +5,8 @@ Creates the async SQLAlchemy engine and session factory that every
 database operation in this application runs through.
 """
 
+from typing import AsyncGenerator
+
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -15,9 +17,9 @@ from app.core.config import settings
 # The engine owns a connection pool, so creating multiple engines
 # would multiply the number of open connections to Postgres unnecessarily.
 engine: AsyncEngine = create_async_engine(
-    settings.postgres_dsn,
-    future=True,       # enables the SQLAlchemy 2.0-style API throughout the codebase
-    echo=False,        # set to True to print every SQL statement — useful when debugging queries
+    settings.database_url,
+    future=True,        # enables the SQLAlchemy 2.0-style API throughout the codebase
+    echo=False,         # set to True to print every SQL statement — useful when debugging queries
     pool_pre_ping=True, # issues a cheap SELECT before each query to discard stale connections
                         # that were silently closed by Postgres after a period of inactivity
 )
@@ -47,11 +49,14 @@ async def init_db() -> None:
         await conn.run_sync(models.Base.metadata.create_all)
 
 
-async def get_session() -> AsyncSession:
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """
     FastAPI dependency that opens an async DB session for exactly one request.
     The async context manager commits on clean exit and rolls back on exception,
     then returns the connection to the pool when the request is complete.
+
+    The return type is AsyncGenerator because this function uses yield —
+    FastAPI's Depends() resolves generators as context managers automatically.
     """
     async with AsyncSessionLocal() as session:
         yield session

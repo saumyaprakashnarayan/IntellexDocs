@@ -5,6 +5,11 @@
  *
  * @type {import('next').NextConfig}
  */
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 const nextConfig = {
   reactStrictMode: true,
 
@@ -19,10 +24,19 @@ const nextConfig = {
 
   // Explicitly re-exporting the variable here ensures it is available both
   // server-side (for SSR routes) and gets inlined into the browser bundle.
-  // Without this, a missing .env.local would cause process.env.NEXT_PUBLIC_API_URL
-  // to be undefined at runtime instead of falling back to the default.
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000",
+  },
+
+  // Webpack alias so `@/` resolves to the project root in all module contexts.
+  // The tsconfig "paths" entry handles TypeScript type-checking; this handles
+  // the actual webpack module resolution at compile time.
+  webpack(config) {
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "@": path.resolve(__dirname),
+    };
+    return config;
   },
 };
 

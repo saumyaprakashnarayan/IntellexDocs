@@ -99,8 +99,11 @@ class DocumentChunk(Base):
     content:      Mapped[str] = mapped_column(Text, nullable=False)
 
     # Serialised dict string: {"user_id": "...", "document_id": "...", ...}
-    # Stored as text because Postgres JSONB would require an extra dependency
-    metadata:     Mapped[str] = mapped_column(Text, nullable=True)
+    # Stored as text because Postgres JSONB would require an extra dependency.
+    # Named chunk_metadata in Python because SQLAlchemy reserves 'metadata'
+    # on all Declarative models (it holds the schema registry).
+    # The actual database column is still called 'metadata' via name="metadata".
+    chunk_metadata: Mapped[str] = mapped_column("metadata", Text, nullable=True)
 
     document = relationship("Document", back_populates="chunks")
 

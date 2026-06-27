@@ -8,32 +8,32 @@ that every authentication flow in this application is built on top of.
 from datetime import datetime, timedelta
 from typing import Any
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
-
-
-# bcrypt is intentionally slow (work factor ~12 rounds by default) which
-# makes offline brute-force attacks against stolen hashes computationally expensive
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
     """
     Converts a plain-text password into a bcrypt hash safe for database storage.
     The hash embeds its own salt so two identical passwords produce different hashes.
+
+    bcrypt is called directly (without passlib) because passlib 1.7.4 is
+    incompatible with bcrypt>=4.0: the newer bcrypt removed __about__ and
+    strictly raises ValueError for passwords over 72 bytes, which crashes
+    passlib's internal detect_wrap_bug() compatibility test at runtime.
     """
-    return _pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     """
     Returns True when the plain-text password matches the stored bcrypt hash.
-    Uses constant-time comparison internally, which prevents timing attacks
-    that could reveal whether the password was almost-correct.
+    bcrypt.checkpw uses constant-time comparison internally, preventing timing
+    attacks that could reveal whether the password was almost-correct.
     """
-    return _pwd_context.verify(password, password_hash)
+    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 
 def create_access_token(subject: Any, expires_delta: timedelta | None = None) -> str:
@@ -65,3 +65,4 @@ def decode_access_token(token: str) -> dict[str, Any]:
         return payload
     except JWTError as exc:
         raise ValueError("Invalid authentication credentials") from exc
+

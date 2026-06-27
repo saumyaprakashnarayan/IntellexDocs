@@ -13,14 +13,16 @@ The three public functions cover the complete lifecycle of a document:
   generate_document_summary — all chunks → LLM → structured summary
 """
 
+import asyncio
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.schema import HumanMessage
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.messages import HumanMessage
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import settings
 from app.db.models import DocumentChunk
@@ -29,14 +31,78 @@ from app.utils.embeddings import EmbeddingService
 from app.utils.pdf_utils import extract_text_pages
 from app.rag.prompts import PROMPT_TEMPLATE, SUMMARY_PROMPT
 
-# Instantiated once at module import time so the ChromaDB connection and the
-# embedding model client are reused across every request in the process lifetime
-chroma_client = ChromaClient()
-embedding_service = EmbeddingService()
-
 # All users' chunks share one collection; the user_id metadata field separates them
 COLLECTION_NAME = "document_chunks"
 
+# ---------------------------------------------------------------------------
+# Lazy singletons
+# ---------------------------------------------------------------------------
+# ChromaClient and EmbeddingService are created on first use, not at import
+# time.  Instantiating them at module level caused the server to crash during
+# startup whenever the Gemini API was temporarily unreachable, because
+# EmbeddingService.__init__() contacts the API to validate the key.
+# Lazy initialisation defers that network call to the first actual request,
+# so the server starts reliably and individual request failures are isolated.
+
+_chroma_client: ChromaClient | None = None
+_embedding_service: EmbeddingService | None = None
+
+
+def _get_chroma_client() -> ChromaClient:
+    """Returns the shared ChromaDB client, creating it on first call."""
+    global _chroma_client
+    if _chroma_client is None:
+        _chroma_client = ChromaClient()
+    return _chroma_client
+
+
+def _get_embedding_service() -> EmbeddingService:
+    """Returns the shared embedding service, creating it on first call."""
+    global _embedding_service
+    if _embedding_service is None:
+        _embedding_service = EmbeddingService()
+    return _embedding_service
+
+
+# ---------------------------------------------------------------------------
+# Async helpers for blocking I/O
+# ---------------------------------------------------------------------------
+
+async def _run_sync(func, *args):
+    """
+    Runs a synchronous (blocking) function in a thread-pool executor so it
+    does not block the FastAPI event loop.
+
+    The Gemini embedding SDK and pypdf both perform blocking I/O (network
+    calls and disk reads respectively).  Calling them directly inside an
+    async function would freeze the event loop and stall all concurrent
+    requests.  asyncio.get_event_loop().run_in_executor() moves the work
+    to a background thread so the event loop stays responsive.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(func, *args))
+
+
+async def _embed_texts(texts: list[str]) -> list[list[float]]:
+    """Vectorises a batch of texts without blocking the event loop."""
+    service = _get_embedding_service()
+    return await _run_sync(service.embed_texts, texts)
+
+
+async def _embed_query(query: str) -> list[float]:
+    """Vectorises a single query string without blocking the event loop."""
+    service = _get_embedding_service()
+    return await _run_sync(service.embed_query, query)
+
+
+async def _extract_pages(file_path: Path) -> list[tuple[int, str]]:
+    """Extracts page text from a PDF without blocking the event loop."""
+    return await _run_sync(extract_text_pages, file_path)
+
+
+# ---------------------------------------------------------------------------
+# Public pipeline functions
+# ---------------------------------------------------------------------------
 
 async def ingest_document(
     document_id: int,
@@ -53,7 +119,8 @@ async def ingest_document(
       - Overlapping windows prevent important sentences from being split across
         two chunks and losing context on both sides
     """
-    pages = extract_text_pages(file_path)
+    # PDF extraction runs in a thread pool so it doesn't block the event loop
+    pages = await _extract_pages(file_path)
 
     # RecursiveCharacterTextSplitter tries paragraph breaks first, then sentence
     # breaks, then word breaks — in that order — before falling back to characters,
@@ -94,7 +161,7 @@ async def ingest_document(
                 page_number=page_number,
                 chunk_index=chunk_idx,
                 content=chunk,
-                metadata=str(metadata),
+                chunk_metadata=str(metadata),
             )
             session.add(chunk_record)
             all_chunks.append(chunk_record)
@@ -107,11 +174,11 @@ async def ingest_document(
     await session.commit()
 
     if texts:
-        # Batching all chunks into one embed_texts() call sends a single HTTP
-        # request to the Gemini API, which is orders of magnitude faster than
-        # one request per chunk for a typical multi-page document
-        embeddings = embedding_service.embed_texts(texts)
-        chroma_client.add(
+        # Embedding runs in a thread pool so the Gemini HTTP call does not block
+        # the event loop — this is the most time-consuming step in ingestion
+        embeddings = await _embed_texts(texts)
+        chroma = _get_chroma_client()
+        chroma.add(
             collection_name=COLLECTION_NAME,
             ids=ids,
             documents=texts,
@@ -132,11 +199,14 @@ async def answer_question(
     top-K results than asking ChromaDB for exactly K with a combined where clause,
     because the ownership filter is applied before the similarity ranking.
     """
-    query_embedding = embedding_service.embed_query(question)
+    # Query embedding runs in a thread pool to avoid blocking the event loop
+    query_embedding = await _embed_query(question)
+
+    chroma = _get_chroma_client()
 
     # user_id filter is applied inside ChromaDB, not in Python, so the similarity
     # index is searched only over this user's documents — a hard security boundary
-    search_results = chroma_client.search(
+    search_results = chroma.search(
         COLLECTION_NAME,
         query_embedding,
         n_results=settings.semantic_search_k * 2,

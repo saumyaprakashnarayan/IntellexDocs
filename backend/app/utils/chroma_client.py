@@ -82,7 +82,7 @@ class ChromaClient:
         query_kwargs: dict[str, Any] = {
             "query_embeddings": [embeddings],
             "n_results": n_results,
-            "include": ["metadatas", "documents", "distances", "ids"],
+            "include": ["metadatas", "documents", "distances"],
         }
 
         # An empty where dict causes a ChromaDB validation error, so it is
