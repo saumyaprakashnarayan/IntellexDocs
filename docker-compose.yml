@@ -1,58 +1,102 @@
+# =============================================================================
+# docker-compose.yml
+# =============================================================================
+# Orchestrates all three services. Docker Compose automatically reads a file
+# named ".env" in this directory and substitutes ${VAR_NAME} placeholders,
+# so no credentials are hardcoded in this file.
+# =============================================================================
+
 version: "3.9"
+
 services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — stores users, documents, document chunks, and chat history
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:15-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: rag_db
+      # Values read from the root .env file; the :-fallback is used when the
+      # variable is absent so the stack still starts with sensible defaults
+      POSTGRES_USER:     ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB:       ${POSTGRES_DB:-rag_db}
     volumes:
+      # Named volume survives `docker compose down`; an anonymous volume would not
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      # The backend service waits for this probe to pass before connecting,
+      # which prevents "could not connect to server" errors during startup
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
-  chromadb:
-    image: ghcr.io/chroma-core/chroma:latest
-    command: ["chromadb", "start", "--persist_directory", "/data", "--host", "0.0.0.0"]
-    volumes:
-      - chroma_data:/data
-    ports:
-      - "8001:8000"
-
+  # ---------------------------------------------------------------------------
+  # Backend — FastAPI + Uvicorn
+  # ---------------------------------------------------------------------------
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    restart: unless-stopped
+    # env_file loads the backend-specific settings (GEMINI_API_KEY, JWT_SECRET, etc.)
+    # from backend/.env so that file is the single place developers edit for local work
+    env_file:
+      - ./backend/.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/rag_db
-<<<<<<< HEAD
-      JWT_SECRET: supersecretjwtkey
-      GEMINI_API_KEY: ""
-=======
-      JWT_SECRET: "${JWT_SECRET:-supersecretjwtkey}"
-      GEMINI_API_KEY: "${GEMINI_API_KEY}"
->>>>>>> 33502da (chore)
-      GEMINI_MODEL: gemini-2.5-flash
-      GEMINI_EMBEDDING_MODEL: embedding-001
-      ALLOWED_ORIGINS: http://localhost:3000
+      # DATABASE_URL overrides the backend/.env value because the host name differs
+      # between Docker ("postgres" service name) and local dev ("localhost")
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-rag_db}
+      # These are pulled from the root .env, not from backend/.env, because they
+      # may differ between deployments (e.g. a staging frontend URL)
+      GEMINI_API_KEY:              ${GEMINI_API_KEY}
+      JWT_SECRET:                  ${JWT_SECRET:-change-me-before-production}
+      ALLOWED_ORIGINS:             ${ALLOWED_ORIGINS:-http://localhost:3000}
+      GEMINI_MODEL:                ${GEMINI_MODEL:-gemini-2.5-flash}
+      GEMINI_EMBEDDING_MODEL:      ${GEMINI_EMBEDDING_MODEL:-models/embedding-001}
+      JWT_ALGORITHM:               ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      ENVIRONMENT:                 ${ENVIRONMENT:-development}
     volumes:
+      # Mounting host directories means uploaded PDFs and ChromaDB data survive
+      # image rebuilds — without these mounts every `docker compose up --build`
+      # would lose all documents
       - ./backend/uploads:/app/uploads
       - ./backend/chroma_db:/app/chroma_db
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
-      - chromadb
+      postgres:
+        # service_healthy waits for the pg_isready healthcheck to pass,
+        # not just for the container process to start
+        condition: service_healthy
 
+  # ---------------------------------------------------------------------------
+  # Frontend — Next.js production build
+  # ---------------------------------------------------------------------------
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_ variables are inlined into the JavaScript bundle at build
+        # time, so this value must be provided as a build ARG, not a runtime ENV
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    restart: unless-stopped
+    environment:
+      # Also exposed at runtime for any SSR route that reads it server-side
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "3000:3000"
     depends_on:
       - backend
 
+# ---------------------------------------------------------------------------
+# Named volumes — data persisted across container lifecycle
+# ---------------------------------------------------------------------------
 volumes:
   postgres_data:
-  chroma_data:

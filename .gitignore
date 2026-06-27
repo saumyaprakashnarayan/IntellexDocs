@@ -1,22 +1,46 @@
-# Python
+# =============================================================================
+# .gitignore — IntellexDocs
+# =============================================================================
+# Files and directories that should NEVER be committed to git.
+# .env files contain secrets — they are explicitly listed here.
+# =============================================================================
+
+# --- Python ------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 env/
 venv/
-*.env
+.venv/
 
-# Node
+# --- Secret environment files ------------------------------------------------
+# .example files ARE committed (they show the required variables with no secrets)
+# All other .env variants are ignored.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# --- Node / Next.js ----------------------------------------------------------
 node_modules/
 .next/
 out/
 .DS_Store
 
-# Docker
+# --- Docker / OS -------------------------------------------------------------
 *.log
 *.pid
 
-# Chroma and uploads
+# --- Generated data (vector DB and uploaded PDFs) ---------------------------
+# These are runtime data directories — never commit them.
 backend/chroma_db/
 backend/uploads/
